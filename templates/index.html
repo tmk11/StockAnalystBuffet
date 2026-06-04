@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Buffett Lens — Phân tích cổ phiếu Mỹ</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">US Stocks · SEC Financials · Buffett-style</p>
+        <h1>Buffett Lens</h1>
+        <p class="lead">
+          Nhập mã cổ phiếu Mỹ để đọc báo cáo tài chính nhiều năm, chấm điểm chất lượng doanh nghiệp,
+          owner earnings, nợ, moat và biên an toàn theo tư duy đầu tư giá trị.
+        </p>
+      </div>
+      <div class="hero-card">
+        <span class="big">100</span>
+        <span>Bộ lọc chất lượng & định giá</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel grid-2">
+        <form id="analyzeForm" class="form-card">
+          <h2>Phân tích 1 cổ phiếu</h2>
+          <label for="ticker">Ticker</label>
+          <div class="input-row">
+            <input id="ticker" name="ticker" placeholder="AAPL" autocomplete="off" required />
+            <button type="submit">Phân tích</button>
+          </div>
+          <p class="hint">Ví dụ: AAPL, MSFT, KO, COST, BRK-B.</p>
+        </form>
+
+        <form id="compareForm" class="form-card">
+          <h2>So sánh 2 cổ phiếu</h2>
+          <div class="pair">
+            <div>
+              <label for="tickerA">Ticker A</label>
+              <input id="tickerA" name="tickerA" placeholder="AAPL" autocomplete="off" required />
+            </div>
+            <div>
+              <label for="tickerB">Ticker B</label>
+              <input id="tickerB" name="tickerB" placeholder="MSFT" autocomplete="off" required />
+            </div>
+          </div>
+          <button type="submit" class="wide">So sánh</button>
+        </form>
+      </section>
+
+      <div id="status" class="status hidden"></div>
+      <section id="result" class="hidden"></section>
+      <section id="compareResult" class="hidden"></section>
+
+      <section class="panel note">
+        <h2>Cách app đánh giá</h2>
+        <div class="check-grid">
+          <div><b>Moat định lượng</b><span>ROE/ROIC cao, margin tốt, lợi nhuận ổn định.</span></div>
+          <div><b>Owner earnings</b><span>FCF và lợi nhuận chủ sở hữu sau capex duy trì nhiều năm.</span></div>
+          <div><b>Bảng cân đối</b><span>Nợ/FCF và nợ/vốn chủ thấp, ít phụ thuộc đòn bẩy.</span></div>
+          <div><b>Biên an toàn</b><span>DCF bảo thủ dùng owner earnings, chiết khấu 10%.</span></div>
+        </div>
+        <p class="disclaimer">Không phải khuyến nghị đầu tư. Hãy đọc 10-K và tự kiểm chứng giả định trước khi ra quyết định.</p>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
