@@ -18,6 +18,7 @@ SEC_USER_AGENT = os.environ.get(
     "SEC_USER_AGENT",
     "us-stock-buffett-app/1.0 contact@example.com",
 )
+ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY")
 
 SEC_HEADERS = {
     "User-Agent": SEC_USER_AGENT,
@@ -120,6 +121,76 @@ def fetch_submissions(cik_padded: str) -> dict[str, Any] | None:
     except requests.RequestException:
         return None
 
+
+def fetch_alpha_vantage_fundamentals(ticker: str) -> dict[str, Any] | None:
+    if not ALPHAVANTAGE_API_KEY:
+        return None
+
+    symbol = canonical_ticker(ticker)
+    try:
+        overview_url = (
+            "https://www.alphavantage.co/query?function=OVERVIEW"
+            f"&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}&datatype=json"
+        )
+        estimates_url = (
+            "https://www.alphavantage.co/query?function=EARNINGS_ESTIMATES"
+            f"&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}&datatype=json"
+        )
+        overview = _get_json(overview_url, ttl_seconds=12 * 3600, headers=MARKET_HEADERS)
+        time.sleep(1.1)
+        estimates = _get_json(estimates_url, ttl_seconds=12 * 3600, headers=MARKET_HEADERS)
+    except requests.RequestException:
+        return None
+
+    if not _alpha_payload_ok(overview):
+        overview = None
+    if not _alpha_payload_ok(estimates):
+        estimates = None
+    if not overview and not estimates:
+        return None
+
+    annual_estimates = []
+    for row in (estimates or {}).get("estimates", []):
+        if str(row.get("horizon", "")).lower() != "fiscal year":
+            continue
+        annual_estimates.append(
+            {
+                "date": row.get("date"),
+                "eps_estimate_average": _safe_float(row.get("eps_estimate_average")),
+                "eps_estimate_high": _safe_float(row.get("eps_estimate_high")),
+                "eps_estimate_low": _safe_float(row.get("eps_estimate_low")),
+                "eps_estimate_analyst_count": _safe_float(row.get("eps_estimate_analyst_count")),
+                "revenue_estimate_average": _safe_float(row.get("revenue_estimate_average")),
+                "revenue_estimate_high": _safe_float(row.get("revenue_estimate_high")),
+                "revenue_estimate_low": _safe_float(row.get("revenue_estimate_low")),
+                "revenue_estimate_analyst_count": _safe_float(row.get("revenue_estimate_analyst_count")),
+            }
+        )
+    annual_estimates.sort(key=lambda item: item.get("date") or "")
+
+    overview = overview or {}
+    return {
+        "source": "alpha_vantage",
+        "overview": {
+            "pe_ratio": _safe_float(overview.get("PERatio")),
+            "trailing_pe": _safe_float(overview.get("TrailingPE")),
+            "forward_pe": _safe_float(overview.get("ForwardPE")),
+            "peg_ratio": _safe_float(overview.get("PEGRatio")),
+            "eps": _safe_float(overview.get("EPS") or overview.get("DilutedEPSTTM")),
+            "quarterly_earnings_growth_yoy": _safe_float(overview.get("QuarterlyEarningsGrowthYOY")),
+            "quarterly_revenue_growth_yoy": _safe_float(overview.get("QuarterlyRevenueGrowthYOY")),
+            "analyst_target_price": _safe_float(overview.get("AnalystTargetPrice")),
+        },
+        "annual_estimates": annual_estimates,
+    }
+
+
+def _alpha_payload_ok(payload: Any) -> bool:
+    if not isinstance(payload, dict) or not payload:
+        return False
+    if payload.get("Note") or payload.get("Information") or payload.get("Error Message"):
+        return False
+    return True
 
 def fetch_market_data(ticker: str) -> dict[str, Any] | None:
     normalized = normalize_ticker(ticker)

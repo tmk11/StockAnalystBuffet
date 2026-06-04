@@ -72,6 +72,7 @@ def analyze_ticker(ticker: str, years: int = 10) -> dict[str, Any]:
 
     annuals = annuals[-years:]
     market_data = sec_client.fetch_market_data(company["ticker"])
+    analyst_data = sec_client.fetch_alpha_vantage_fundamentals(company["ticker"])
     shares_outstanding = sec_client.extract_latest_series_value(facts, SHARES_OUTSTANDING)
     shares_source = "sec_entity_common_stock_shares_outstanding" if shares_outstanding else None
     if not shares_outstanding:
@@ -82,7 +83,8 @@ def analyze_ticker(ticker: str, years: int = 10) -> dict[str, Any]:
         shares_outstanding = market_data["shares_outstanding"]
         shares_source = market_data.get("shares_source") or "market_data_implied"
 
-    summary = _summarize(annuals, market_data=market_data, shares_outstanding=shares_outstanding)
+    forecast = _build_growth_forecast(annuals, market_data, analyst_data)
+    summary = _summarize(annuals, market_data=market_data, shares_outstanding=shares_outstanding, forecast=forecast)
     valuation = _estimate_intrinsic_value(annuals, market_data=market_data, shares_outstanding=shares_outstanding)
     score = _score(annuals, summary, valuation)
     narrative = _narrative(company, annuals, summary, valuation, score)
@@ -92,15 +94,18 @@ def analyze_ticker(ticker: str, years: int = 10) -> dict[str, Any]:
         "annuals": annuals,
         "summary": summary,
         "valuation": valuation,
+        "forecast": forecast,
         "score": score,
         "narrative": narrative,
         "price": market_data,
         "market_data": market_data,
+        "analyst_data": analyst_data,
         "shares_outstanding": shares_outstanding,
         "shares_source": shares_source,
         "data_source": {
             "financials": "SEC Company Facts XBRL",
             "market_data": market_data["source"] if market_data else None,
+            "growth_forecast": forecast.get("source"),
             "latest_period_end": sec_client.latest_period_from_facts(facts),
         },
         "disclaimer": "Dữ liệu và phân tích chỉ để tham khảo, không phải khuyến nghị đầu tư.",
@@ -237,6 +242,7 @@ def _summarize(
     annuals: list[dict[str, Any]],
     market_data: dict[str, Any] | None,
     shares_outstanding: float | None,
+    forecast: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     latest = annuals[-1]
     lookback = annuals[-5:] if len(annuals) >= 5 else annuals
@@ -275,7 +281,182 @@ def _summarize(
         "p_fcf": _div(market_cap, latest.get("free_cash_flow")),
         "earnings_yield": _div(latest.get("net_income"), market_cap),
         "fcf_yield": _div(latest.get("free_cash_flow"), market_cap),
+        "forecast_growth_rate": (forecast or {}).get("growth_rate"),
+        "peg_ratio": (forecast or {}).get("peg_ratio"),
+        "peg_source": (forecast or {}).get("peg_source"),
     }
+
+
+def _build_growth_forecast(
+    annuals: list[dict[str, Any]],
+    market_data: dict[str, Any] | None,
+    analyst_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    latest = annuals[-1]
+    overview = (analyst_data or {}).get("overview") or {}
+    analyst_estimates = _forecast_from_alpha_estimates(annuals, analyst_data)
+    if analyst_estimates["years"]:
+        growth_rate = analyst_estimates["eps_cagr"] or analyst_estimates["revenue_cagr"]
+        source = "alpha_vantage_estimates"
+    else:
+        growth_rate = None
+        source = "internal_history_model"
+
+    historical_growth = _blended_historical_growth(annuals)
+    if growth_rate is None:
+        growth_rate = historical_growth
+    elif historical_growth is not None:
+        growth_rate = _clamp(mean([growth_rate, historical_growth]), -0.10, 0.20)
+
+    if growth_rate is None:
+        growth_rate = 0.03
+    growth_rate = _clamp(growth_rate, -0.10, 0.20)
+
+    pe_ratio = overview.get("pe_ratio") or overview.get("trailing_pe") or _pe_from_market_data(market_data, latest)
+    api_peg = overview.get("peg_ratio")
+    calculated_peg = _peg_ratio(pe_ratio, growth_rate)
+    peg_ratio = api_peg if api_peg and api_peg > 0 else calculated_peg
+    peg_source = "alpha_vantage_overview" if api_peg and api_peg > 0 else "calculated"
+
+    internal_years = _internal_forecast_years(annuals, growth_rate, years=5)
+    years = _merge_forecast_years(internal_years, analyst_estimates["years"])
+
+    return {
+        "source": source,
+        "growth_rate": growth_rate,
+        "historical_growth_rate": historical_growth,
+        "pe_ratio": pe_ratio,
+        "peg_ratio": peg_ratio,
+        "calculated_peg_ratio": calculated_peg,
+        "peg_source": peg_source,
+        "api_peg_ratio": api_peg,
+        "quarterly_earnings_growth_yoy": overview.get("quarterly_earnings_growth_yoy"),
+        "quarterly_revenue_growth_yoy": overview.get("quarterly_revenue_growth_yoy"),
+        "analyst_target_price": overview.get("analyst_target_price"),
+        "years": years,
+        "method": _forecast_method(source, bool(analyst_estimates["years"]), bool(api_peg)),
+    }
+
+
+def _forecast_from_alpha_estimates(
+    annuals: list[dict[str, Any]], analyst_data: dict[str, Any] | None
+) -> dict[str, Any]:
+    estimates = (analyst_data or {}).get("annual_estimates") or []
+    latest = annuals[-1]
+    latest_eps = latest.get("eps_diluted")
+    latest_revenue = latest.get("revenue")
+    years: list[dict[str, Any]] = []
+    for row in estimates[:5]:
+        year = _year_from_date(row.get("date"))
+        eps = row.get("eps_estimate_average")
+        revenue = row.get("revenue_estimate_average")
+        years.append(
+            {
+                "year": year,
+                "eps_estimate": eps,
+                "eps_growth": _div(eps, latest_eps) - 1 if _positive(eps) and _positive(latest_eps) else None,
+                "revenue_estimate": revenue,
+                "revenue_growth": _div(revenue, latest_revenue) - 1 if _positive(revenue) and _positive(latest_revenue) else None,
+                "analyst_count_eps": row.get("eps_estimate_analyst_count"),
+                "analyst_count_revenue": row.get("revenue_estimate_analyst_count"),
+                "source": "alpha_vantage",
+            }
+        )
+
+    eps_values = [latest_eps] + [row.get("eps_estimate") for row in years if _positive(row.get("eps_estimate"))]
+    revenue_values = [latest_revenue] + [row.get("revenue_estimate") for row in years if _positive(row.get("revenue_estimate"))]
+    return {
+        "years": years,
+        "eps_cagr": _cagr(eps_values),
+        "revenue_cagr": _cagr(revenue_values),
+    }
+
+
+def _internal_forecast_years(annuals: list[dict[str, Any]], growth_rate: float, years: int) -> list[dict[str, Any]]:
+    latest = annuals[-1]
+    base_eps = latest.get("eps_diluted")
+    base_revenue = latest.get("revenue")
+    base_owner_earnings = latest.get("owner_earnings") or latest.get("free_cash_flow")
+    rows: list[dict[str, Any]] = []
+    for offset in range(1, years + 1):
+        rows.append(
+            {
+                "year": latest["year"] + offset,
+                "eps_estimate": base_eps * ((1 + growth_rate) ** offset) if base_eps is not None else None,
+                "eps_growth": ((1 + growth_rate) ** offset) - 1,
+                "revenue_estimate": base_revenue * ((1 + growth_rate) ** offset) if base_revenue is not None else None,
+                "revenue_growth": ((1 + growth_rate) ** offset) - 1,
+                "owner_earnings_estimate": base_owner_earnings * ((1 + growth_rate) ** offset)
+                if base_owner_earnings is not None
+                else None,
+                "source": "internal_history_model",
+            }
+        )
+    return rows
+
+
+def _merge_forecast_years(internal_rows: list[dict[str, Any]], analyst_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_year = {row.get("year"): row for row in internal_rows if row.get("year")}
+    for row in analyst_rows:
+        year = row.get("year")
+        if not year:
+            continue
+        merged = by_year.get(year, {"year": year})
+        merged.update({key: value for key, value in row.items() if value is not None})
+        by_year[year] = merged
+    return [by_year[year] for year in sorted(by_year)][:5]
+
+
+def _blended_historical_growth(annuals: list[dict[str, Any]]) -> float | None:
+    candidates = [
+        _cagr([row.get("eps_diluted") for row in annuals]),
+        _cagr([row.get("net_income") for row in annuals]),
+        _cagr([row.get("owner_earnings") for row in annuals]),
+        _cagr([row.get("free_cash_flow") for row in annuals]),
+        _cagr([row.get("revenue") for row in annuals]),
+    ]
+    values = [value for value in candidates if value is not None and math.isfinite(value)]
+    if not values:
+        return None
+    return _clamp(median(values), -0.10, 0.20)
+
+
+def _pe_from_market_data(market_data: dict[str, Any] | None, latest: dict[str, Any]) -> float | None:
+    if market_data and market_data.get("price") and latest.get("eps_diluted"):
+        return _div(market_data["price"], latest.get("eps_diluted"))
+    return None
+
+
+def _peg_ratio(pe_ratio: float | None, growth_rate: float | None) -> float | None:
+    if pe_ratio is None or growth_rate is None or growth_rate <= 0:
+        return None
+    return pe_ratio / (growth_rate * 100)
+
+
+def _forecast_method(source: str, has_analyst_estimates: bool, has_api_peg: bool) -> str:
+    parts = []
+    if has_analyst_estimates:
+        parts.append("EPS/revenue estimates từ Alpha Vantage")
+    else:
+        parts.append("fallback nội bộ dựa trên CAGR lịch sử đã chặn biên -10% đến 20%")
+    if has_api_peg:
+        parts.append("PEG lấy trực tiếp từ Alpha Vantage Overview")
+    else:
+        parts.append("PEG tự tính = P/E / tăng trưởng EPS dự báo (%)")
+    return "; ".join(parts) + "."
+
+
+def _year_from_date(value: Any) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(str(value)[:4])
+    except ValueError:
+        return None
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _estimate_intrinsic_value(
@@ -434,6 +615,8 @@ def _compare(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
         _compare_metric("FCF dương", first, second, "summary.positive_fcf_years", higher=True),
         _compare_metric("Tăng trưởng doanh thu CAGR", first, second, "summary.revenue_cagr", higher=True),
         _compare_metric("Tăng trưởng owner earnings CAGR", first, second, "summary.owner_earnings_cagr", higher=True),
+        _compare_metric("Dự báo tăng trưởng EPS", first, second, "summary.forecast_growth_rate", higher=True),
+        _compare_metric("PEG ratio", first, second, "summary.peg_ratio", higher=False),
         _compare_metric("Nợ/FCF mới nhất", first, second, "summary.latest_debt_to_fcf", higher=False),
         _compare_metric("FCF yield", first, second, "summary.fcf_yield", higher=True),
         _compare_metric("Biên an toàn DCF", first, second, "valuation.margin_of_safety", higher=True),
@@ -518,6 +701,11 @@ def _checklist(summary: dict[str, Any], valuation: dict[str, Any], annuals: list
             "label": "Owner earnings tăng trưởng",
             "passed": (summary.get("owner_earnings_cagr") or 0) > 0.04,
             "value": {"owner_earnings_cagr": summary.get("owner_earnings_cagr")},
+        },
+        {
+            "label": "PEG không quá đắt so với tăng trưởng",
+            "passed": summary.get("peg_ratio") is not None and summary["peg_ratio"] <= 1.5,
+            "value": {"peg_ratio": summary.get("peg_ratio"), "forecast_growth_rate": summary.get("forecast_growth_rate")},
         },
         {
             "label": "Có biên an toàn khi mua",

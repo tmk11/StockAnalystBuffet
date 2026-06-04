@@ -83,6 +83,7 @@ function renderStock(stock, options = {}) {
   const company = stock.company;
   const summary = stock.summary;
   const valuation = stock.valuation || {};
+  const forecast = stock.forecast || {};
   const price = stock.price || {};
   const score = stock.score || {};
   const narrative = stock.narrative || {};
@@ -111,6 +112,8 @@ function renderStock(stock, options = {}) {
         ${metric("ROE 5 năm", fmtPct(summary.avg_roe_5y))}
         ${metric("FCF yield", fmtPct(summary.fcf_yield))}
         ${metric("P/FCF", fmtX(summary.p_fcf))}
+        ${metric("Dự báo tăng trưởng", fmtPct(summary.forecast_growth_rate))}
+        ${metric("PEG ratio", fmtX(summary.peg_ratio))}
         ${metric("Biên an toàn", fmtPct(valuation.margin_of_safety))}
         ${metric("Nợ/FCF", fmtX(summary.latest_debt_to_fcf))}
       </div>
@@ -133,6 +136,7 @@ function renderStock(stock, options = {}) {
       </div>
 
       ${valuation.available ? valuationBox(valuation, price) : `<div class="box"><h3>Định giá</h3><p class="muted">${esc(valuation.reason || "Không đủ dữ liệu định giá.")}</p></div>`}
+      ${forecastBox(forecast)}
       ${compact ? "" : annualTable(stock.annuals || [])}
       <p class="muted">Nguồn BCTC: ${esc(stock.data_source?.financials)}${price.date ? ` · Giá: ${esc(price.date)} (${esc(price.source)})` : ""}</p>
     </article>
@@ -193,8 +197,9 @@ function labelize(key) {
 function formatLoose(key, value) {
   if (value === null || value === undefined) return "—";
   if (key.includes("years")) return `${value}`;
-  if (key.includes("margin") || key.includes("roe") || key.includes("roic") || key.includes("cagr")) return fmtPct(value);
+  if (key.includes("margin") || key.includes("roe") || key.includes("roic") || key.includes("cagr") || key.includes("growth")) return fmtPct(value);
   if (key.includes("debt")) return fmtX(value);
+  if (key.includes("peg")) return fmtX(value);
   return fmtNum(value);
 }
 
@@ -209,6 +214,41 @@ function valuationBox(valuation, price) {
         ${metric("Giá hiện tại", fmtPrice(price.price))}
       </div>
       <p class="muted">${esc(valuation.method || "")}</p>
+    </div>`;
+}
+
+function forecastBox(forecast) {
+  if (!forecast || !forecast.years || !forecast.years.length) {
+    return `<div class="box"><h3>Dự báo tăng trưởng & PEG</h3><p class="muted">Không đủ dữ liệu dự báo.</p></div>`;
+  }
+  return `
+    <div class="box">
+      <h3>Dự báo tăng trưởng & PEG</h3>
+      <div class="metrics">
+        ${metric("Tăng trưởng dự báo", fmtPct(forecast.growth_rate))}
+        ${metric("P/E dùng tính PEG", fmtX(forecast.pe_ratio))}
+        ${metric("PEG ratio", fmtX(forecast.peg_ratio))}
+        ${metric("Nguồn PEG", forecast.peg_source === "alpha_vantage_overview" ? "Alpha Vantage" : "Tự tính")}
+      </div>
+      <p class="muted">${esc(forecast.method || "")}</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Năm</th><th>EPS dự báo</th><th>Tăng EPS</th><th>Doanh thu dự báo</th><th>Tăng doanh thu</th><th>Nguồn</th></tr>
+          </thead>
+          <tbody>
+            ${forecast.years.map((row) => `
+              <tr>
+                <td class="left"><b>${esc(row.year || "—")}</b></td>
+                <td>${fmtNum(row.eps_estimate, 2)}</td>
+                <td>${fmtPct(row.eps_growth)}</td>
+                <td>${fmtMoney(row.revenue_estimate)}</td>
+                <td>${fmtPct(row.revenue_growth)}</td>
+                <td>${row.source === "alpha_vantage" ? "Alpha Vantage" : "Nội bộ"}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
     </div>`;
 }
 
@@ -298,6 +338,7 @@ function formatCompare(label, value) {
   if (label.includes("Điểm")) return fmtNum(value, 0);
   if (label.includes("dương")) return `${value}`;
   if (label.includes("Nợ/FCF")) return fmtX(value);
+  if (label.includes("PEG")) return fmtX(value);
   return fmtPct(value);
 }
 
