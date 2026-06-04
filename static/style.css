@@ -438,6 +438,60 @@ tr:last-child td {
   font-weight: 900;
 }
 
+.form-title-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+  align-items: start;
+}
+
+.reverse-form {
+  display: grid;
+  gap: 18px;
+}
+
+.reverse-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.reverse-grid input {
+  font-size: 15px;
+  text-transform: none;
+}
+
+.result-note {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #f8f1e5;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.warnings {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.warning {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff2d6;
+  color: #7d5411;
+  font-weight: 700;
+}
+
+.error-list {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #fff0ec;
+  color: var(--red);
+  font-weight: 800;
+}
+
 .check-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -467,8 +521,13 @@ tr:last-child td {
   .grid-2,
   .section-grid,
   .compare-summary,
+  .form-title-row,
   .check-grid {
     grid-template-columns: 1fr;
+  }
+
+  .reverse-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .metrics {
@@ -492,6 +551,7 @@ tr:last-child td {
   .input-row,
   .pair,
   .stock-head,
+  .reverse-grid,
   .metrics {
     grid-template-columns: 1fr;
   }

@@ -342,6 +342,99 @@ function formatCompare(label, value) {
   return fmtPct(value);
 }
 
+function renderReverseDcf(result) {
+  const input = result.input || {};
+  if (!result.ok) {
+    return `
+      <article class="compare-card">
+        <h2>Reverse DCF Valuation</h2>
+        <div class="error-list">${(result.errors || []).map((error) => `<div>⚠ ${esc(error)}</div>`).join("")}</div>
+        ${warningsHtml(result.warnings)}
+      </article>`;
+  }
+  return `
+    <article class="compare-card">
+      <div class="stock-head">
+        <div>
+          <div class="ticker"><strong>${esc(input.ticker || "Reverse DCF")}</strong><span>${esc(input.company_name || "")}</span></div>
+          <p class="muted">${esc(result.commentary || "")}</p>
+        </div>
+        <div class="score-box">
+          <span class="score">${fmtPct(result.impliedGrowthRate)}</span>
+          <span>Implied FCF Growth / năm</span>
+        </div>
+      </div>
+      ${warningsHtml(result.warnings)}
+      <div class="metrics">
+        ${metric("Current EV", fmtMoney(result.enterpriseValue))}
+        ${metric("Calculated DCF", fmtMoney(result.calculatedDcfValue))}
+        ${metric("PV forecast FCF", fmtMoney(result.pvForecastFcf))}
+        ${metric("PV terminal", fmtMoney(result.pvTerminalValue))}
+        ${metric("Terminal value", fmtMoney(result.terminalValue))}
+        ${metric("Margin of error", fmtPct(result.marginOfError))}
+        ${metric("Projection years", input.projection_years ?? "—")}
+        ${metric("WACC / terminal", `${fmtPct(input.discount_rate)} / ${fmtPct(input.terminal_growth_rate)}`)}
+      </div>
+      <div class="section-grid">
+        <div class="box">
+          <h3>Bảng dự phóng FCF</h3>
+          ${reverseProjectionTable(result.projectionTable || [])}
+        </div>
+        <div class="box">
+          <h3>Sensitivity table</h3>
+          ${reverseSensitivityTable(result.sensitivityTable || [])}
+        </div>
+      </div>
+      <div class="result-note">${esc(result.disclaimer || "Reverse DCF chỉ là công cụ đọc kỳ vọng của thị trường, không phải khuyến nghị đầu tư.")}</div>
+    </article>`;
+}
+
+function warningsHtml(warnings) {
+  if (!warnings || !warnings.length) return "";
+  return `<div class="warnings">${warnings.map((warning) => `<div class="warning">⚠ ${esc(warning)}</div>`).join("")}</div>`;
+}
+
+function reverseProjectionTable(rows) {
+  if (!rows.length) return `<p class="muted">Không có bảng dự phóng.</p>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Year</th><th>Projected FCF</th><th>Discount factor</th><th>PV of FCF</th></tr></thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td class="left"><b>${esc(row.year)}</b></td>
+              <td>${fmtMoney(row.projectedFcf)}</td>
+              <td>${fmtNum(row.discountFactor, 3)}</td>
+              <td>${fmtMoney(row.presentValueOfFcf)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function reverseSensitivityTable(rows) {
+  if (!rows.length) return `<p class="muted">Không có sensitivity table.</p>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Discount Rate</th><th>Terminal Growth</th><th>Implied Growth</th></tr></thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td class="left">${fmtPct(row.discountRate)}</td>
+              <td>${fmtPct(row.terminalGrowthRate)}</td>
+              <td>${fmtPct(row.impliedGrowthRate)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function formValue(id) {
+  return $(id).value.trim();
+}
+
 $("#analyzeForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const ticker = $("#ticker").value.trim();
@@ -349,6 +442,7 @@ $("#analyzeForm").addEventListener("submit", async (event) => {
   setBusy(true);
   showStatus(`Đang lấy BCTC SEC và phân tích ${ticker.toUpperCase()}...`);
   $("#compareResult").classList.add("hidden");
+  $("#reverseDcfResult").classList.add("hidden");
   try {
     const result = await postJson("/api/analyze", { ticker, years: 10 });
     $("#result").innerHTML = renderStock(result);
@@ -369,10 +463,42 @@ $("#compareForm").addEventListener("submit", async (event) => {
   setBusy(true);
   showStatus(`Đang so sánh ${tickerA.toUpperCase()} và ${tickerB.toUpperCase()}...`);
   $("#result").classList.add("hidden");
+  $("#reverseDcfResult").classList.add("hidden");
   try {
     const result = await postJson("/api/compare", { ticker_a: tickerA, ticker_b: tickerB, years: 10 });
     $("#compareResult").innerHTML = renderComparison(result);
     $("#compareResult").classList.remove("hidden");
+    hideStatus();
+  } catch (error) {
+    showStatus(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$("#reverseDcfForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const ticker = formValue("#rdTicker");
+  const payload = {
+    ticker,
+    market_cap: formValue("#rdMarketCap"),
+    share_price: formValue("#rdSharePrice"),
+    shares_outstanding: formValue("#rdShares"),
+    total_debt: formValue("#rdDebt"),
+    cash_and_equivalents: formValue("#rdCash"),
+    current_fcf: formValue("#rdFcf"),
+    projection_years: formValue("#rdYears"),
+    discount_rate: formValue("#rdDiscount"),
+    terminal_growth_rate: formValue("#rdTerminal"),
+  };
+  setBusy(true);
+  showStatus("Đang tính Reverse DCF...");
+  $("#result").classList.add("hidden");
+  $("#compareResult").classList.add("hidden");
+  try {
+    const result = await postJson("/api/reverse-dcf", payload);
+    $("#reverseDcfResult").innerHTML = renderReverseDcf(result);
+    $("#reverseDcfResult").classList.remove("hidden");
     hideStatus();
   } catch (error) {
     showStatus(error.message, true);

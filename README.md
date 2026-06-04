@@ -10,6 +10,7 @@ Web app Flask giúp người dùng nhập mã chứng khoán Mỹ, lấy dữ li
 - Chấm điểm 0–100 theo 6 nhóm: lợi nhuận, bền vững, moat/margin, bảng cân đối, tăng trưởng, định giá.
 - Ước tính giá trị nội tại đơn giản bằng owner earnings DCF bảo thủ: tăng trưởng bị giới hạn, chiết khấu 10%.
 - Dự báo tăng trưởng EPS/doanh thu các năm tới và tính PEG ratio. Nếu có `ALPHAVANTAGE_API_KEY`, app dùng Alpha Vantage estimates/PEGRatio; nếu thiếu, app tự tính từ lịch sử SEC.
+- Reverse DCF Valuation: tính ngược tốc độ tăng trưởng FCF mà thị trường đang kỳ vọng từ giá/market cap hiện tại.
 - So sánh 2 ticker theo điểm tổng, ROIC/ROE, FCF, tăng trưởng, nợ và biên an toàn.
 - Cache dữ liệu trong thư mục `cache/` để giảm gọi SEC/Stooq.
 
@@ -56,15 +57,32 @@ curl 'http://127.0.0.1:8866/api/analyze?ticker=AAPL&years=10'
 curl 'http://127.0.0.1:8866/api/compare?ticker_a=AAPL&ticker_b=MSFT&years=10'
 ```
 
+### Reverse DCF
+
+```bash
+curl -X POST 'http://127.0.0.1:8866/api/reverse-dcf' \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"AAPL","projection_years":10,"discount_rate":"10%","terminal_growth_rate":"2.5%"}'
+```
+
+Nếu nhập `ticker`, app tự lấy `market_cap`, `price`, `shares_outstanding`, `debt`, `cash` và `FCF` từ các nguồn hiện có. Người dùng có thể override thủ công bằng `market_cap`, `share_price`, `shares_outstanding`, `total_debt`, `cash_and_equivalents`, `current_fcf`.
+
 ## Cấu trúc
 
 - `app.py` — Flask routes và xử lý lỗi.
 - `sec_client.py` — gọi SEC/Stooq, cache, chuẩn hóa ticker, trích dữ liệu XBRL.
 - `analyzer.py` — tính chỉ số, owner earnings, DCF, điểm Buffett-style và so sánh.
 - `analyzer.py` — tính chỉ số, owner earnings, forecast growth, PEG, DCF, điểm Buffett-style và so sánh.
+- `valuation/reverse_dcf.py` — service tính Reverse DCF, binary search implied growth và sensitivity table.
 - `templates/index.html` — giao diện chính.
 - `static/app.js` — gọi API và render dashboard.
 - `static/style.css` — giao diện responsive.
+
+## Test
+
+```bash
+python -m unittest discover -s tests
+```
 
 ## Lưu ý phân tích
 
@@ -73,3 +91,4 @@ curl 'http://127.0.0.1:8866/api/compare?ticker_a=AAPL&ticker_b=MSFT&years=10'
 - Với ngân hàng, bảo hiểm và công ty tài chính, các chỉ số nợ/FCF có thể không phù hợp như doanh nghiệp sản xuất/dịch vụ thông thường.
 - Một số nguồn market data public có thể giới hạn tần suất hoặc thiếu ticker đặc biệt; khi đó app tự fallback giữa Nasdaq, Yahoo Chart và Stooq.
 - PEG ratio = `P/E / tăng trưởng EPS dự báo (%)`; nếu Alpha Vantage trả `PEGRatio`, app ưu tiên giá trị đó và vẫn hiển thị forecast growth riêng.
+- Reverse DCF không dự đoán chắc chắn giá trị thật của cổ phiếu; nó chỉ cho biết market price hiện tại đang hàm ý mức tăng trưởng FCF nào.

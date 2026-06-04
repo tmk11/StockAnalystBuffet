@@ -50,9 +50,35 @@
         </form>
       </section>
 
+      <section class="panel">
+        <form id="reverseDcfForm" class="form-card reverse-form">
+          <div class="form-title-row">
+            <div>
+              <p class="eyebrow">Valuation → Reverse DCF</p>
+              <h2>Thị trường đang kỳ vọng FCF tăng bao nhiêu?</h2>
+              <p class="hint">Nhập ticker để app tự lấy dữ liệu; các ô bên dưới có thể để trống hoặc override thủ công. Đơn vị USD, hỗ trợ dạng 120B, 4.5T.</p>
+            </div>
+            <button type="submit">Tính Reverse DCF</button>
+          </div>
+          <div class="reverse-grid">
+            <div><label for="rdTicker">Ticker / Company</label><input id="rdTicker" placeholder="AAPL" autocomplete="off" /></div>
+            <div><label for="rdMarketCap">Current market cap</label><input id="rdMarketCap" placeholder="Tự lấy hoặc 3.2T" /></div>
+            <div><label for="rdSharePrice">Current share price</label><input id="rdSharePrice" placeholder="Tự lấy hoặc 195.50" /></div>
+            <div><label for="rdShares">Shares outstanding</label><input id="rdShares" placeholder="Tự lấy hoặc 15.3B" /></div>
+            <div><label for="rdDebt">Total debt</label><input id="rdDebt" placeholder="Tự lấy hoặc 100B" /></div>
+            <div><label for="rdCash">Cash and equivalents</label><input id="rdCash" placeholder="Tự lấy hoặc 60B" /></div>
+            <div><label for="rdFcf">Current FCF, FCF₀</label><input id="rdFcf" placeholder="Tự lấy hoặc 95B" /></div>
+            <div><label for="rdYears">Projection years</label><input id="rdYears" value="10" /></div>
+            <div><label for="rdDiscount">Discount rate / WACC</label><input id="rdDiscount" value="10%" /></div>
+            <div><label for="rdTerminal">Terminal growth</label><input id="rdTerminal" value="2.5%" /></div>
+          </div>
+        </form>
+      </section>
+
       <div id="status" class="status hidden"></div>
       <section id="result" class="hidden"></section>
       <section id="compareResult" class="hidden"></section>
+      <section id="reverseDcfResult" class="hidden"></section>
 
       <section class="panel note">
         <h2>Cách app đánh giá</h2>
