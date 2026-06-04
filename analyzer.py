@@ -71,14 +71,19 @@ def analyze_ticker(ticker: str, years: int = 10) -> dict[str, Any]:
         raise sec_client.DataError(f"Không đọc được dữ liệu tài chính nhiều năm cho {company['ticker']}.")
 
     annuals = annuals[-years:]
-    price = sec_client.fetch_latest_price(company["ticker"])
+    market_data = sec_client.fetch_market_data(company["ticker"])
     shares_outstanding = sec_client.extract_latest_series_value(facts, SHARES_OUTSTANDING)
+    shares_source = "sec_entity_common_stock_shares_outstanding" if shares_outstanding else None
     if not shares_outstanding:
         shares = [row.get("diluted_shares") for row in annuals if row.get("diluted_shares")]
         shares_outstanding = shares[-1] if shares else None
+        shares_source = "sec_weighted_average_diluted_shares" if shares_outstanding else None
+    if not shares_outstanding and market_data and market_data.get("shares_outstanding"):
+        shares_outstanding = market_data["shares_outstanding"]
+        shares_source = market_data.get("shares_source") or "market_data_implied"
 
-    summary = _summarize(annuals, price=price, shares_outstanding=shares_outstanding)
-    valuation = _estimate_intrinsic_value(annuals, price=price, shares_outstanding=shares_outstanding)
+    summary = _summarize(annuals, market_data=market_data, shares_outstanding=shares_outstanding)
+    valuation = _estimate_intrinsic_value(annuals, market_data=market_data, shares_outstanding=shares_outstanding)
     score = _score(annuals, summary, valuation)
     narrative = _narrative(company, annuals, summary, valuation, score)
 
@@ -89,11 +94,13 @@ def analyze_ticker(ticker: str, years: int = 10) -> dict[str, Any]:
         "valuation": valuation,
         "score": score,
         "narrative": narrative,
-        "price": price,
+        "price": market_data,
+        "market_data": market_data,
         "shares_outstanding": shares_outstanding,
+        "shares_source": shares_source,
         "data_source": {
             "financials": "SEC Company Facts XBRL",
-            "price": price["source"] if price else None,
+            "market_data": market_data["source"] if market_data else None,
             "latest_period_end": sec_client.latest_period_from_facts(facts),
         },
         "disclaimer": "Dữ liệu và phân tích chỉ để tham khảo, không phải khuyến nghị đầu tư.",
@@ -228,7 +235,7 @@ def _debt_series(facts: dict[str, Any]) -> dict[int, float]:
 
 def _summarize(
     annuals: list[dict[str, Any]],
-    price: dict[str, Any] | None,
+    market_data: dict[str, Any] | None,
     shares_outstanding: float | None,
 ) -> dict[str, Any]:
     latest = annuals[-1]
@@ -237,7 +244,9 @@ def _summarize(
     net_income_cagr = _cagr([row.get("net_income") for row in annuals])
     fcf_cagr = _cagr([row.get("free_cash_flow") for row in annuals])
     owner_earnings_cagr = _cagr([row.get("owner_earnings") for row in annuals])
-    market_cap = price["price"] * shares_outstanding if price and shares_outstanding else None
+    market_cap = market_data.get("market_cap") if market_data else None
+    if market_cap is None and market_data and market_data.get("price") and shares_outstanding:
+        market_cap = market_data["price"] * shares_outstanding
 
     return {
         "years": [row["year"] for row in annuals],
@@ -271,7 +280,7 @@ def _summarize(
 
 def _estimate_intrinsic_value(
     annuals: list[dict[str, Any]],
-    price: dict[str, Any] | None,
+    market_data: dict[str, Any] | None,
     shares_outstanding: float | None,
 ) -> dict[str, Any]:
     recent = annuals[-3:] if len(annuals) >= 3 else annuals
@@ -306,7 +315,7 @@ def _estimate_intrinsic_value(
     present_value += terminal_value / ((1 + discount_rate) ** horizon_years)
 
     intrinsic_per_share = _div(present_value, shares_outstanding)
-    current_price = price["price"] if price else None
+    current_price = market_data["price"] if market_data and market_data.get("price") else None
     margin_of_safety = _div(intrinsic_per_share, current_price)
     if margin_of_safety is not None:
         margin_of_safety -= 1

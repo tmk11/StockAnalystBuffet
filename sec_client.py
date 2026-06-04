@@ -25,6 +25,14 @@ SEC_HEADERS = {
     "Accept": "application/json,text/plain,*/*",
 }
 
+MARKET_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+    "Accept": "application/json,text/plain,*/*",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/market-activity/stocks",
+}
+
 ANNUAL_FORMS = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
 
 
@@ -113,7 +121,113 @@ def fetch_submissions(cik_padded: str) -> dict[str, Any] | None:
         return None
 
 
+def fetch_market_data(ticker: str) -> dict[str, Any] | None:
+    normalized = normalize_ticker(ticker)
+    market_data: dict[str, Any] = {"ticker": normalized, "sources": []}
+
+    nasdaq_data = _fetch_nasdaq_market_data(normalized)
+    if nasdaq_data:
+        market_data.update({key: value for key, value in nasdaq_data.items() if value is not None})
+        market_data["sources"].append("nasdaq")
+
+    if not market_data.get("price"):
+        yahoo_data = _fetch_yahoo_chart_price(normalized)
+        if yahoo_data:
+            market_data.update({key: value for key, value in yahoo_data.items() if value is not None})
+            market_data["sources"].append("yahoo_chart")
+
+    if not market_data.get("price"):
+        stooq_data = _fetch_stooq_price(normalized)
+        if stooq_data:
+            market_data.update({key: value for key, value in stooq_data.items() if value is not None})
+            market_data["sources"].append("stooq")
+
+    if market_data.get("market_cap") and market_data.get("price") and not market_data.get("shares_outstanding"):
+        market_data["shares_outstanding"] = market_data["market_cap"] / market_data["price"]
+        market_data["shares_source"] = "market_cap_divided_by_price"
+
+    if not market_data.get("price") and not market_data.get("market_cap"):
+        return None
+    market_data["source"] = "+".join(market_data["sources"])
+    return market_data
+
+
 def fetch_latest_price(ticker: str) -> dict[str, Any] | None:
+    market_data = fetch_market_data(ticker)
+    if not market_data or not market_data.get("price"):
+        return None
+    return {
+        "price": market_data.get("price"),
+        "date": market_data.get("date"),
+        "source": market_data.get("source"),
+    }
+
+
+def _fetch_nasdaq_market_data(ticker: str) -> dict[str, Any] | None:
+    symbol = _nasdaq_symbol(ticker)
+    output: dict[str, Any] = {}
+    try:
+        info_url = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=stocks"
+        info = _get_json(info_url, ttl_seconds=15 * 60, headers=MARKET_HEADERS)
+        info_data = info.get("data") or {}
+        primary = info_data.get("primaryData") or {}
+        price = _parse_market_number(primary.get("lastSalePrice"))
+        if price:
+            output.update(
+                {
+                    "price": price,
+                    "date": primary.get("lastTradeTimestamp"),
+                    "currency": primary.get("currency") or "USD",
+                    "market_status": info_data.get("marketStatus"),
+                    "company_name": info_data.get("companyName"),
+                    "price_source": "nasdaq",
+                }
+            )
+
+        summary_url = f"https://api.nasdaq.com/api/quote/{symbol}/summary?assetclass=stocks"
+        summary = _get_json(summary_url, ttl_seconds=30 * 60, headers=MARKET_HEADERS)
+        summary_data = ((summary.get("data") or {}).get("summaryData") or {})
+        market_cap = _parse_market_number((summary_data.get("MarketCap") or {}).get("value"))
+        previous_close = _parse_market_number((summary_data.get("PreviousClose") or {}).get("value"))
+        if market_cap:
+            output["market_cap"] = market_cap
+            output["market_cap_source"] = "nasdaq"
+        if previous_close and not output.get("price"):
+            output["price"] = previous_close
+            output["price_source"] = "nasdaq_previous_close"
+        return output or None
+    except requests.RequestException:
+        return None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _fetch_yahoo_chart_price(ticker: str) -> dict[str, Any] | None:
+    symbol = canonical_ticker(ticker)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
+    try:
+        payload = _get_json(url, ttl_seconds=15 * 60, headers=MARKET_HEADERS)
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        meta = (result or {}).get("meta") or {}
+        price = _safe_float(meta.get("regularMarketPrice"))
+        if not price:
+            price = _safe_float(meta.get("chartPreviousClose"))
+        if not price:
+            return None
+        return {
+            "price": price,
+            "date": meta.get("regularMarketTime"),
+            "currency": meta.get("currency") or "USD",
+            "company_name": meta.get("longName") or meta.get("shortName"),
+            "price_source": "yahoo_chart",
+        }
+    except requests.RequestException:
+        return None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _fetch_stooq_price(ticker: str) -> dict[str, Any] | None:
     symbol = ticker.lower().replace("-", ".")
     url = f"https://stooq.com/q/l/?s={symbol}.us&i=d"
     try:
@@ -135,8 +249,31 @@ def fetch_latest_price(ticker: str) -> dict[str, Any] | None:
     return {
         "price": price,
         "date": row.get("Date"),
-        "source": "stooq",
+        "price_source": "stooq",
     }
+
+
+def _nasdaq_symbol(ticker: str) -> str:
+    return normalize_ticker(ticker).replace("-", ".")
+
+
+def _parse_market_number(value: Any) -> float | None:
+    if value in (None, "", "N/A", "--"):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("$", "").replace(",", "").replace("%", "")
+    if not text or text.upper() in {"N/A", "NA", "--"}:
+        return None
+    multiplier = 1.0
+    suffix = text[-1].upper()
+    if suffix in {"T", "B", "M", "K"}:
+        multiplier = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}[suffix]
+        text = text[:-1]
+    try:
+        return float(text) * multiplier
+    except ValueError:
+        return None
 
 
 def normalize_ticker(ticker: str) -> str:

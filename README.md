@@ -15,7 +15,7 @@ Web app Flask giúp người dùng nhập mã chứng khoán Mỹ, lấy dữ li
 ## Nguồn dữ liệu
 
 - Báo cáo tài chính: SEC `company_tickers.json`, `companyfacts` và `submissions`.
-- Giá tham khảo: Stooq CSV public endpoint, dùng để tính market cap, P/FCF và margin of safety nếu có dữ liệu cổ phiếu lưu hành.
+- Dữ liệu thị trường: Nasdaq public quote API trước, Yahoo Chart và Stooq CSV làm fallback. App dùng giá/market cap trực tiếp nếu có, rồi mới tự suy ra market cap từ giá × số cổ phiếu.
 
 ## Chạy local
 
@@ -67,3 +67,4 @@ curl 'http://127.0.0.1:8866/api/compare?ticker_a=AAPL&ticker_b=MSFT&years=10'
 - Đây là bộ lọc định lượng, chưa thay thế việc đọc 10-K, đánh giá moat thật, ban lãnh đạo và ngành.
 - Dữ liệu XBRL có thể khác nhau theo ngành/ticker; app xử lý thiếu dữ liệu bằng cách hiển thị `—` hoặc bỏ qua tiêu chí không đủ dữ liệu.
 - Với ngân hàng, bảo hiểm và công ty tài chính, các chỉ số nợ/FCF có thể không phù hợp như doanh nghiệp sản xuất/dịch vụ thông thường.
+- Một số nguồn market data public có thể giới hạn tần suất hoặc thiếu ticker đặc biệt; khi đó app tự fallback giữa Nasdaq, Yahoo Chart và Stooq.
